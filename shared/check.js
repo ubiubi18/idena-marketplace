@@ -1,44 +1,30 @@
-import {checkApiKey} from './utils/node-api'
 import {createPool} from './utils/pg'
 import {godNode} from './utils/utils'
+import {ApiError} from './api'
+import {normalizeAddress} from './security'
 
-export async function checkInvitationLimit(inviter, epoch) {
-  const pool = createPool()
-
+export async function checkInvitationLimit(inviter, epoch, db = createPool()) {
   if (!inviter) {
-    throw new Error('the invitation code is missing')
+    throw new ApiError(400, 'the invitation code is missing')
   }
 
-  if (inviter.toLowerCase() === godNode()) {
+  const normalizedInviter = normalizeAddress(inviter, 'inviter')
+
+  if (normalizedInviter === godNode()) {
     return true
   }
 
-  const invitationsQuery = await pool.query(
+  const invitationsQuery = await db.query(
     `
 select count(*)
 from keys
 where epoch = $1 and inviter = $2`,
-    [epoch, inviter]
+    [epoch, normalizedInviter]
   )
 
-  if (invitationsQuery.rowCount > 4) {
-    throw new Error('inviter has exceeded the limit')
+  if (Number(invitationsQuery.rows[0]?.count || 0) >= 4) {
+    throw new ApiError(400, 'inviter has reached the limit of 4 API keys')
   }
 
   return true
-}
-
-export async function checkKey(key, providerId) {
-  try {
-    const pool = createPool()
-
-    const providerQuery = await pool.query('select * from providers where id = $1', [providerId])
-
-    const provider = providerQuery.rows[0]
-
-    await checkApiKey(provider.url, key)
-    return true
-  } catch (e) {
-    return false
-  }
 }

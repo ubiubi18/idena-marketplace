@@ -1,92 +1,86 @@
-import {checkKey} from '../../../shared/check'
+import {prepareApi, sendApiError, ApiError} from '../../../shared/api'
+import {
+  assertUnusedTransactionHash,
+  assertKeyLimit,
+  findAvailableKey,
+  reserveKey,
+  withCoinbaseLock,
+} from '../../../shared/key-store'
 import {Transaction} from '../../../shared/models/transaction'
-import {getEpoch, sendRawTx} from '../../../shared/utils/node-api'
+import {
+  assertPaymentTransaction,
+  normalizeAddress,
+  normalizeProviders,
+} from '../../../shared/security'
+import {TxType} from '../../../shared/types'
+import {
+  checkApiKey,
+  getEpoch,
+  getIdentity,
+  sendRawTx,
+} from '../../../shared/utils/node-api'
 import {createPool} from '../../../shared/utils/pg'
 
-const TxType = {
-  Send: 0,
-  Activate: 1,
-}
-
-function checkTx(tx) {
-  const parsedTx = new Transaction().fromHex(tx)
-
-  if (parsedTx.type !== TxType.Send) throw new Error('tx has invalid type')
-}
-
-async function checkForPurchasedKeys(epoch, coinbase) {
-  const pool = createPool()
-
-  const keysQuery = await pool.query(
-    `
-select * from keys 
-where coinbase = $1 and epoch = $2`,
-    [coinbase, epoch]
-  )
-
-  if (keysQuery.rowCount > 4) throw new Error('Your address has exceeded the limit (4 API keys per address)')
-}
-
-export default async (req, res) => {
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end()
+function parsePaymentTransaction(hex) {
+  if (typeof hex !== 'string' || hex.length > 64 * 1024) {
+    throw new ApiError(400, 'transaction is invalid')
   }
-  const {coinbase, tx, provider} = req.body
-  if (!coinbase || !tx) {
-    return res.status(400).send('bad request')
+  let transaction
+  try {
+    transaction = new Transaction().fromHex(hex)
+  } catch {
+    throw new ApiError(400, 'transaction is invalid')
   }
+  if (transaction.type !== TxType.Send) {
+    throw new ApiError(400, 'transaction has invalid type')
+  }
+  return transaction
+}
+
+export default async function handler(req, res) {
+  if (!prepareApi(req, res, ['POST'])) return
 
   try {
-    checkTx(tx)
+    const [providerId] = normalizeProviders([req.body?.provider])
+    const transaction = parsePaymentTransaction(req.body?.tx)
+    const requestedCoinbase = normalizeAddress(req.body?.coinbase, 'coinbase')
     const {epoch} = await getEpoch()
+    const identity = await getIdentity(requestedCoinbase)
+    const providerResult = await createPool().query(
+      'select id, address from providers where id = $1',
+      [providerId]
+    )
+    const provider = providerResult.rows[0]
+    if (!provider) throw new ApiError(404, 'provider not found')
 
-    await checkForPurchasedKeys(epoch, coinbase)
-
-    const pool = createPool()
-
-    const bookQuery = await pool.query(
-      `
-with cte as (
-    select id
-    from keys
-    where provider_id = $2 
-      and epoch = $3 
-      and coinbase is null 
-      and free = false
-    limit 1
-)
-update keys
-set coinbase = $1,
-    updated_at = now()
-where id in (select id from cte)
-returning id, key;
-`,
-      [coinbase, provider, epoch]
+    const coinbase = assertPaymentTransaction(
+      transaction,
+      requestedCoinbase,
+      provider,
+      identity
     )
 
-    if (!bookQuery.rowCount) {
-      return res.status(400).send('no keys left')
-    }
+    const booked = await withCoinbaseLock(coinbase, epoch, async (client) => {
+      await assertKeyLimit(client, coinbase, epoch)
+      const candidate = await findAvailableKey(client, providerId, epoch, false)
+      if (!candidate) throw new ApiError(409, 'no keys are available')
+      try {
+        await checkApiKey(candidate.url, candidate.key)
+      } catch {
+        throw new ApiError(409, 'provider is unavailable')
+      }
 
-    const key = bookQuery.rows[0]
+      const hash = await assertUnusedTransactionHash(
+        client,
+        await sendRawTx(req.body.tx)
+      )
+      const reserved = await reserveKey(client, candidate, {coinbase, hash})
+      if (!reserved) throw new ApiError(409, 'key was reserved by another request')
+      return reserved
+    })
 
-    if (!(await checkKey(key.key, provider))) {
-      await pool.query('update keys set coinbase = null where id = $1', [key.id])
-      return res.status(400).send('This node is unavailable now. Please try later or select another shared node.')
-    }
-
-    let hash = null
-    try {
-      hash = await sendRawTx(tx)
-      await pool.query('update keys set hash = $2, updated_at = now() where id = $1', [key.id, hash])
-    } catch (e) {
-      // transaction send failed, rollback
-      await pool.query('update keys set coinbase = null where id = $1', [key.id])
-      return res.status(400).send(e.message)
-    }
-
-    return res.status(200).json({id: key.id, txHash: hash})
-  } catch (e) {
-    return res.status(400).send(e.message)
+    return res.status(200).json({id: booked.id, txHash: booked.hash})
+  } catch (error) {
+    return sendApiError(res, error, 'failed to purchase API key')
   }
 }

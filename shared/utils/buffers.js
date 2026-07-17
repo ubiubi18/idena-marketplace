@@ -21,11 +21,9 @@ function padToEven(a) {
   return a.length % 2 ? `0${a}` : a
 }
 
-export function bufferToInt(buf) {
-  if (!buf || !buf.length) {
-    return 0
-  }
-  return parseInt(Buffer.from(buf).toString('hex'), 16)
+export function bufferToBigInt(buf) {
+  if (!buf || !buf.length) return 0n
+  return BigInt(`0x${Buffer.from(buf).toString('hex')}`)
 }
 
 function intToBuffer(integer) {
@@ -37,15 +35,25 @@ export function toBuffer(v) {
   if (!Buffer.isBuffer(v)) {
     if (typeof v === 'string') {
       if (isHexPrefixed(v)) {
-        return Buffer.from(padToEven(stripHexPrefix(v)), 'hex')
+        const hex = stripHexPrefix(v)
+        if (!/^[0-9a-fA-F]*$/.test(hex)) throw new Error('invalid hex value')
+        return Buffer.from(padToEven(hex), 'hex')
       }
       return Buffer.from(v)
     }
     if (typeof v === 'number') {
+      if (!Number.isSafeInteger(v) || v < 0) {
+        throw new Error('invalid unsigned integer')
+      }
       if (!v) {
         return Buffer.from([])
       }
       return intToBuffer(v)
+    }
+    if (typeof v === 'bigint') {
+      if (v < 0n) throw new Error('invalid negative integer')
+      if (v === 0n) return Buffer.from([])
+      return Buffer.from(padToEven(v.toString(16)), 'hex')
     }
     if (v === null || v === undefined) {
       return Buffer.from([])
@@ -59,7 +67,12 @@ export function toBuffer(v) {
 }
 
 export function hexToUint8Array(hexString) {
+  if (typeof hexString !== 'string') throw new Error('invalid hex value')
   const str = stripHexPrefix(hexString)
+
+  if (str.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(str)) {
+    throw new Error('invalid hex value')
+  }
 
   const arrayBuffer = new Uint8Array(str.length / 2)
 
@@ -75,7 +88,6 @@ export function toHexString(byteArray, withPrefix) {
   return (
     (withPrefix ? '0x' : '') +
     Array.from(byteArray, function(byte) {
-      // eslint-disable-next-line no-bitwise
       return `0${(byte & 0xff).toString(16)}`.slice(-2)
     }).join('')
   )
