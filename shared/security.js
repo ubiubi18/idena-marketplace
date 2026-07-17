@@ -112,6 +112,20 @@ export function normalizeTransactionHash(value) {
   return value.toLowerCase()
 }
 
+export function parseBearerToken(value) {
+  if (typeof value !== 'string' || value.length > 8192) return null
+  const prefix = 'bearer '
+  if (value.slice(0, prefix.length).toLowerCase() !== prefix) return null
+
+  const token = value.slice(prefix.length)
+  if (token.length === 0) return null
+  for (let index = 0; index < token.length; index += 1) {
+    const code = token.charCodeAt(index)
+    if (code <= 0x20 || code === 0x7f) return null
+  }
+  return token
+}
+
 export function safeTokenEqual(actual, expected) {
   if (!actual || !expected) return false
   const actualHash = crypto.createHash('sha256').update(String(actual)).digest()

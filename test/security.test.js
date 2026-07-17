@@ -11,6 +11,7 @@ import {
   dnaToAtomic,
   normalizeProviders,
   normalizeTransactionHash,
+  parseBearerToken,
   priceForIdentity,
   safeTokenEqual,
 } from '../shared/security'
@@ -155,6 +156,10 @@ test('preserves zero-amount transaction tips and rejects unsafe integers', () =>
 })
 
 test('compares manager tokens without accepting missing values', () => {
+  assert.equal(parseBearerToken('Bearer manager-token'), 'manager-token')
+  assert.equal(parseBearerToken('bearer manager-token'), 'manager-token')
+  assert.equal(parseBearerToken('Bearer  manager-token'), null)
+  assert.equal(parseBearerToken(`Bearer ${' '.repeat(10000)}`), null)
   assert.equal(safeTokenEqual('token', 'token'), true)
   assert.equal(safeTokenEqual('token', 'other'), false)
   assert.equal(safeTokenEqual(undefined, undefined), false)

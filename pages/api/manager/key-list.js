@@ -1,14 +1,11 @@
 import {getEpoch} from '../../../shared/utils/node-api'
 import {createPool} from '../../../shared/utils/pg'
 import {prepareApi, sendApiError, ApiError} from '../../../shared/api'
-import {normalizeProviders, safeTokenEqual} from '../../../shared/security'
-
-function parseHeader(req) {
-  const auth = req.headers.authorization
-  if (!auth) return null
-  const match = /^Bearer\s+(.+)$/i.exec(auth)
-  return match?.[1] || null
-}
+import {
+  normalizeProviders,
+  parseBearerToken,
+  safeTokenEqual,
+} from '../../../shared/security'
 
 const ONE_DAY = 1000 * 60 * 60 * 24
 
@@ -16,7 +13,7 @@ export default async (req, res) => {
   if (!prepareApi(req, res, ['GET'])) return
   try {
     const [provider] = normalizeProviders([req.query.provider])
-    const token = parseHeader(req)
+    const token = parseBearerToken(req.headers.authorization)
     if (!safeTokenEqual(token, process.env.MANAGER_TOKEN)) {
       throw new ApiError(403, 'access denied')
     }
