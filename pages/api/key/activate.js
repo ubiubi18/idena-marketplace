@@ -1,118 +1,92 @@
-/* eslint-disable no-loop-func */
-import {checkInvitationLimit, checkKey} from '../../../shared/check'
+import {checkInvitationLimit} from '../../../shared/check'
+import {prepareApi, sendApiError, ApiError} from '../../../shared/api'
+import {
+  findAvailableKey,
+  getAvailableProviderIds,
+  assertUnusedTransactionHash,
+  reserveKey,
+  withCoinbaseLock,
+} from '../../../shared/key-store'
 import {Transaction} from '../../../shared/models/transaction'
+import {
+  assertActivationTransaction,
+  normalizeProviders,
+} from '../../../shared/security'
 import {TxType} from '../../../shared/types'
-import {getEpoch, getIdentity, sendRawTx} from '../../../shared/utils/node-api'
-import {createPool} from '../../../shared/utils/pg'
+import {
+  checkApiKey,
+  getEpoch,
+  getIdentity,
+  sendRawTx,
+} from '../../../shared/utils/node-api'
 import {shuffle} from '../../../shared/utils/utils'
 
-function checkTx(tx) {
-  const parsedTx = new Transaction().fromHex(tx)
-
-  if (parsedTx.type !== TxType.Activate) throw new Error('tx has invalid type')
-
-  return parsedTx
+function parseActivationTransaction(hex) {
+  if (typeof hex !== 'string' || hex.length > 64 * 1024) {
+    throw new ApiError(400, 'transaction is invalid')
+  }
+  let transaction
+  try {
+    transaction = new Transaction().fromHex(hex)
+  } catch {
+    throw new ApiError(400, 'transaction is invalid')
+  }
+  if (transaction.type !== TxType.Activate) {
+    throw new ApiError(400, 'transaction has invalid type')
+  }
+  return transaction
 }
 
-async function getInviter(from) {
-  const invitation = await getIdentity(from)
-  return invitation?.inviter?.address
-}
-
-export default async (req, res) => {
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end()
-  }
-  const {coinbase, tx} = req.body
-  if (!coinbase || !tx) {
-    return res.status(400).send('bad request')
-  }
+export default async function handler(req, res) {
+  if (!prepareApi(req, res, ['POST'])) return
 
   try {
-    const pool = createPool()
-    const parsedTx = checkTx(tx)
-
-    const clientProviders = req.body.providers
-
-    if (clientProviders && clientProviders.length === 0) {
-      throw new Error('there are no shared nodes available')
-    }
-
-    const {epoch} = await getEpoch()
-    const inviter = await getInviter(parsedTx.from)
-
-    await checkInvitationLimit(inviter, epoch)
-
-    const availableProvidersQuery = await pool.query(
-      `
-select provider_id
-from keys
-where epoch = $1 
-group by provider_id
-having sum(case when free then 1 else 0 end) > 0`,
-      [epoch]
+    const transaction = parseActivationTransaction(req.body?.tx)
+    const {coinbase, signer} = assertActivationTransaction(
+      transaction,
+      req.body?.coinbase
     )
+    const clientProviders = normalizeProviders(req.body?.providers)
+    const {epoch} = await getEpoch()
+    const inviter = (await getIdentity(signer))?.inviter?.address
 
-    let availableProviders = availableProvidersQuery.rows.map(x => x.provider_id)
-
-    // filter providers which are available from client side
+    let providerIds = await getAvailableProviderIds(epoch, true)
     if (clientProviders) {
-      availableProviders = availableProviders.filter(x => clientProviders.includes(x))
+      providerIds = providerIds.filter((id) => clientProviders.includes(id))
     }
+    shuffle(providerIds)
 
-    shuffle(availableProviders)
-
-    let booked = null
-    for (let i = 0; i < availableProviders.length && !booked; i += 1) {
-      const bookQuery = await pool.query(
-        `
-with cte as (
-    select id
-    from keys
-    where provider_id = $1 
-      and epoch = $2 
-      and coinbase is null 
-      and free = true
-    limit 1
-)
-update keys
-set coinbase = $3,
-    inviter = $4,
-    updated_at = now()
-where id in (select id from cte)
-returning id, key, provider_id;
-`,
-        [availableProviders[i], epoch, coinbase, inviter]
-      )
-
-      if (bookQuery.rowCount) {
-        // eslint-disable-next-line prefer-destructuring
-        booked = bookQuery.rows[0]
-
-        if (!(await checkKey(booked.key, booked.provider_id))) {
-          await pool.query('update keys set coinbase = null where id = $1', [booked.id])
-
-          booked = null
+    const booked = await withCoinbaseLock(coinbase, epoch, async (client) => {
+      await checkInvitationLimit(inviter, epoch, client)
+      for (const providerId of providerIds) {
+        const candidate = await findAvailableKey(client, providerId, epoch, true)
+        if (!candidate) continue
+        try {
+          await checkApiKey(candidate.url, candidate.key)
+        } catch {
+          continue
         }
+
+        const hash = await assertUnusedTransactionHash(
+          client,
+          await sendRawTx(req.body.tx)
+        )
+        const reserved = await reserveKey(client, candidate, {
+          coinbase,
+          hash,
+          inviter,
+        })
+        if (reserved) return reserved
       }
-    }
+      throw new ApiError(409, 'no usable keys are available')
+    })
 
-    if (!booked) {
-      throw new Error('no keys left')
-    }
-
-    let hash = null
-    try {
-      hash = await sendRawTx(tx)
-      await pool.query('update keys set hash = $2 where id = $1', [booked.id, hash])
-    } catch (e) {
-      // transaction send failed, rollback
-      await pool.query('update keys set coinbase = null where id = $1', [booked.id])
-      return res.status(400).send(e.message)
-    }
-
-    return res.status(200).json({id: booked.id, provider: booked.provider_id, txHash: hash})
-  } catch (e) {
-    return res.status(400).send(e.message)
+    return res.status(200).json({
+      id: booked.id,
+      provider: booked.provider_id,
+      txHash: booked.hash || null,
+    })
+  } catch (error) {
+    return sendApiError(res, error, 'failed to activate API key')
   }
 }

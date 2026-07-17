@@ -1,16 +1,19 @@
 import {getEpoch} from '../../../shared/utils/node-api'
 import {createPool} from '../../../shared/utils/pg'
+import {prepareApi, sendApiError} from '../../../shared/api'
+import {PROVIDER_PRICES} from '../../../shared/security'
 
 export default async (req, res) => {
-  const {epoch} = await getEpoch()
-
-  const pool = createPool()
-
+  if (!prepareApi(req, res, ['GET'])) return
   try {
+    const {epoch} = await getEpoch()
+    const pool = createPool()
     const result = await pool.query(
       `
 with cte as (
-	select provider_id, sum(case when free = false then 1 else 0 end) as paid, sum(case when free = true then 1 else 0 end) as free
+		select provider_id,
+          sum(case when free = false and coinbase is null then 1 else 0 end) as paid,
+          sum(case when free = true and coinbase is null then 1 else 0 end) as free
 	from keys
 	where epoch = $1
 	group by provider_id
@@ -25,18 +28,17 @@ from providers p inner join cte on cte.provider_id = p.id`,
         id: item.id,
         data: {
           url: item.url,
-          ownerName: item.ownerName,
+          ownerName: item.ownerName ?? item.ownername,
           price: item.price,
           location: item.location,
           address: item.address,
-          prices: [1, 3, 5],
+          prices: PROVIDER_PRICES,
         },
-        slots: item.paid,
-        inviteSlots: item.free,
+        slots: Number(item.paid),
+        inviteSlots: Number(item.free),
       }))
     )
-  } catch (e) {
-    console.log(e)
-    return res.status(400).send('failed to get a provider')
+  } catch (error) {
+    return sendApiError(res, error, 'failed to get a provider')
   }
 }

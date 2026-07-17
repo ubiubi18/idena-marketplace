@@ -1,0 +1,12 @@
+title = "idena-marketplace gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Generated dependency and Next build directories"
+condition = "OR"
+paths = [
+  '''(^|/)\.next/''',
+  '''(^|/)node_modules/''',
+]

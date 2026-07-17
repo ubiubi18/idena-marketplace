@@ -1,8 +1,8 @@
-import sha3 from 'js-sha3'
-import secp256k1 from 'secp256k1'
+import {keccak_256} from '@noble/hashes/sha3.js'
 import messages from './proto/models_pb'
-import {toBuffer, hexToUint8Array, toHexString, bufferToInt} from '../utils/buffers'
+import {toBuffer, hexToUint8Array, toHexString, bufferToBigInt} from '../utils/buffers'
 import {getAddrFromSignature} from '../utils/signature'
+import {signHash} from '../utils/secp256k1'
 
 export class Transaction {
   constructor(nonce, epoch, type, to, amount, maxFee, tips, payload) {
@@ -29,9 +29,9 @@ export class Transaction {
     this.epoch = protoTxData.getEpoch()
     this.type = protoTxData.getType()
     this.to = toHexString(protoTxData.getTo(), true)
-    this.amount = bufferToInt(protoTxData.getAmount())
-    this.maxFee = bufferToInt(protoTxData.getMaxfee())
-    this.tips = bufferToInt(protoTxData.getTips())
+    this.amount = bufferToBigInt(protoTxData.getAmount())
+    this.maxFee = bufferToBigInt(protoTxData.getMaxfee())
+    this.tips = bufferToBigInt(protoTxData.getTips())
     this.payload = protoTxData.getPayload()
 
     this.signature = protoTx.getSignature()
@@ -40,12 +40,8 @@ export class Transaction {
   }
 
   sign(key) {
-    const hash = sha3.keccak_256.array(this._createProtoTxData().serializeBinary())
-
-    const {signature, recid} = secp256k1.ecdsaSign(
-      new Uint8Array(hash),
-      typeof key === 'string' ? hexToUint8Array(key) : new Uint8Array(key)
-    )
+    const hash = keccak_256(this._createProtoTxData().serializeBinary())
+    const {signature, recid} = signHash(hash, key)
 
     this.signature = Buffer.from([...signature, recid])
 
@@ -86,7 +82,7 @@ export class Transaction {
     if (this.maxFee) {
       data.setMaxfee(toBuffer(this.maxFee))
     }
-    if (this.amount) {
+    if (this.tips) {
       data.setTips(toBuffer(this.tips))
     }
     if (this.payload) {

@@ -1,29 +1,43 @@
 import {getTx} from '../../../shared/utils/node-api'
 import {createPool} from '../../../shared/utils/pg'
+import {prepareApi, sendApiError, ApiError} from '../../../shared/api'
 
 const HASH_IN_MEMPOOL = '0x0000000000000000000000000000000000000000000000000000000000000000'
 
+export function hasMinedBlock(transaction) {
+  return Boolean(
+    transaction &&
+      typeof transaction.blockHash === 'string' &&
+      transaction.blockHash.length > 0 &&
+      transaction.blockHash !== HASH_IN_MEMPOOL
+  )
+}
+
 export default async (req, res) => {
+  if (!prepareApi(req, res, ['GET'])) return
   const {id} = req.query
-  if (!id) {
-    return res.status(400).send('bad request')
+  if (typeof id !== 'string' || id.length === 0 || id.length > 256) {
+    return res.status(400).send('key id is invalid')
   }
   const pool = createPool()
   try {
-    const result = await pool.query('select * from keys where id = $1', [id])
+    const result = await pool.query(
+      'select id, key, epoch, hash, mined from keys where id = $1',
+      [id]
+    )
 
     if (!result.rowCount) {
-      return res.status(400).send('key not found')
+      throw new ApiError(404, 'key not found')
     }
 
     const key = result.rows[0]
 
     let {mined} = key
 
-    if (!mined) {
+    if (!mined && key.hash) {
       const tx = await getTx(key.hash)
 
-      if (tx && tx.blockHash !== HASH_IN_MEMPOOL) {
+      if (hasMinedBlock(tx)) {
         // set mined
         await pool.query('update keys set mined = true where id = $1', [id])
         mined = true
@@ -35,7 +49,7 @@ export default async (req, res) => {
     }
 
     return res.status(400).send('tx is not mined')
-  } catch (e) {
-    return res.status(400).send('failed to retrieve api key')
+  } catch (error) {
+    return sendApiError(res, error, 'failed to retrieve API key')
   }
 }

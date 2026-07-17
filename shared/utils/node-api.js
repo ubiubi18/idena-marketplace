@@ -1,72 +1,29 @@
-import axios from 'axios'
-
-function api() {
-  const instance = axios.create({
-    baseURL: process.env.PROXY_URL,
-  })
-  instance.interceptors.request.use(function(config) {
-    config.data.key = process.env.PROXY_KEY
-    return config
-  })
-  return instance
-}
+import {ApiError} from '../api'
+import {callNodeRpc, postJsonRpc} from './rpc'
 
 export async function getTx(hash) {
-  const {data} = await api().post('/', {
-    method: 'bcn_transaction',
-    params: [hash],
-    id: 1,
-  })
-  const {result, error} = data
-  if (error) throw new Error(error.message)
-  return result
+  return (await callNodeRpc('bcn_transaction', [hash])).result
 }
 
 export async function sendRawTx(hex) {
-  const {data} = await api().post('/', {
-    method: 'bcn_sendRawTx',
-    params: [hex],
-    id: 1,
-  })
-  const {result, error} = data
-  if (error) throw new Error(error.message)
-  return result
+  return (await callNodeRpc('bcn_sendRawTx', [hex])).result
 }
 
 export async function getEpoch() {
-  const {data} = await api().post('/', {
-    method: 'dna_epoch',
-    params: [],
-    id: 1,
-  })
-  const {result, error} = data
-  if (error) throw new Error(error.message)
-  return result
+  return (await callNodeRpc('dna_epoch', [])).result
 }
 
 export async function getIdentity(addr) {
-  const {data} = await api().post('/', {
-    method: 'dna_identity',
-    params: [addr],
-    id: 1,
-  })
-  const {result, error} = data
-  if (error) throw new Error(error.message)
-  return result
+  return (await callNodeRpc('dna_identity', [addr])).result
 }
 
 export async function checkApiKey(url, key) {
-  const {data} = await axios
-    .create({
-      baseURL: url,
-    })
-    .post('/', {
-      method: 'dna_epoch',
-      params: [],
-      id: 1,
-      key,
-    })
-  const {result, error} = data
-  if (error) throw new Error(error.message)
-  return result
+  const response = await postJsonRpc(url, {
+    id: 1,
+    key,
+    method: 'dna_epoch',
+    params: [],
+  })
+  if (response.error) throw new ApiError(502, 'provider rejected API key')
+  return response.result
 }

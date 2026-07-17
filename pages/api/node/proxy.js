@@ -1,39 +1,26 @@
-const {createProxyMiddleware} = require('http-proxy-middleware')
+import {prepareApi, sendApiError, ApiError} from '../../../shared/api'
+import {callNodeRpc} from '../../../shared/utils/rpc'
 
-const proxy = createProxyMiddleware({
-  changeOrigin: true,
-  secure: false,
-  target: process.env.PROXY_URL,
-  onProxyReq(proxyReq, req) {
-    const data = JSON.stringify({...req.body, key: process.env.PROXY_KEY})
-    proxyReq.setHeader('Content-Length', Buffer.byteLength(data))
-    proxyReq.write(data)
-  },
-  pathRewrite: {
-    '^/api/node/proxy': '/',
-  },
-})
-
-const AVAILABLE_METHODS = [
+const AVAILABLE_METHODS = new Set([
   'dna_identity',
   'dna_epoch',
   'bcn_getRawTx',
   'bcn_sendRawTx',
   'bcn_transaction',
   'dna_getBalance',
-]
+])
 
-export default async (req, res) => {
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end()
-  }
+export default async function handler(req, res) {
+  if (!prepareApi(req, res, ['POST'])) return
+
   try {
-    if (AVAILABLE_METHODS.indexOf(req.body.method) === -1) {
-      res.status(403).send('method not available')
-      return
+    const {id = 1, method, params = []} = req.body || {}
+    if (!AVAILABLE_METHODS.has(method) || !Array.isArray(params)) {
+      throw new ApiError(403, 'method not available')
     }
-    return proxy(req, res)
-  } catch (e) {
-    return res.status(400).send('request failed')
+    const response = await callNodeRpc(method, params)
+    return res.status(200).json({...response, id})
+  } catch (error) {
+    return sendApiError(res, error)
   }
 }

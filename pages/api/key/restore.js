@@ -1,32 +1,18 @@
-/* eslint-disable no-loop-func */
-import {hexToUint8Array} from '../../../shared/utils/buffers'
 import {getEpoch} from '../../../shared/utils/node-api'
 import {createPool} from '../../../shared/utils/pg'
-import {getAddrFromSignature} from '../../../shared/utils/signature'
+import {prepareApi, sendApiError, ApiError} from '../../../shared/api'
+import {assertCoinbaseSignature} from '../../../shared/security'
 
 export default async (req, res) => {
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end()
-  }
-  const {coinbase, signature} = req.body
-  if (!coinbase || !signature) {
-    return res.status(400).send('bad request')
-  }
-
-  const addr = getAddrFromSignature(hexToUint8Array(coinbase), signature)
-
-  if (addr !== coinbase) {
-    return res.status(400).send('bad signature')
-  }
-
-  const pool = createPool()
-
+  if (!prepareApi(req, res, ['POST'])) return
   try {
+    const coinbase = assertCoinbaseSignature(req.body?.coinbase, req.body?.signature)
+    const pool = createPool()
     const {epoch} = await getEpoch()
 
     const keysQuery = await pool.query(
       `
-select * from keys 
+select id, provider_id, epoch from keys
 where coinbase = $1 and epoch = $2 
 order by updated_at desc 
 limit 1`,
@@ -34,13 +20,16 @@ limit 1`,
     )
 
     if (!keysQuery.rowCount) {
-      return res.status(400).send('key not found')
+      throw new ApiError(404, 'key not found')
     }
 
-    const providerQuery = await pool.query('select * from providers where id = $1', [keysQuery.rows[0].provider_id])
+    const providerQuery = await pool.query('select id, url from providers where id = $1', [
+      keysQuery.rows[0].provider_id,
+    ])
 
     const key = keysQuery.rows[0]
     const provider = providerQuery.rows[0]
+    if (!provider) throw new ApiError(404, 'provider not found')
 
     return res.status(200).json({
       key: key.id,
@@ -48,8 +37,7 @@ limit 1`,
       epoch: key.epoch,
       provider: provider.id,
     })
-  } catch (e) {
-    console.log(e)
-    return res.status(400).send('failed to get a provider')
+  } catch (error) {
+    return sendApiError(res, error, 'failed to restore API key')
   }
 }

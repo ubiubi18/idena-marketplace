@@ -1,40 +1,36 @@
 {
-  "name": "nextjs",
+  "name": "idena-marketplace",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "npm@11.16.0",
+  "engines": {
+    "node": ">=24.18.0 <25",
+    "npm": ">=11.16.0"
+  },
   "scripts": {
     "dev": "next dev --port 3050",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "lint": "eslint .",
+    "test": "tsx --test",
+    "check": "npm run lint && npm test && npm run build && npm audit --audit-level=high"
   },
   "dependencies": {
-    "axios": "^0.21.1",
-    "ethereumjs-util": "^7.0.10",
-    "google-protobuf": "^3.15.6",
-    "http-proxy-middleware": "^1.0.6",
-    "js-sha3": "^0.8.0",
-    "next": "^12.3.7",
-    "pg": "^8.16.0",
-    "react": "^17.0.2",
-    "react-dom": "17.0.1",
-    "secp256k1": "^4.0.2",
-    "uuid": "^8.3.2"
+    "@noble/hashes": "2.2.0",
+    "@noble/secp256k1": "3.1.0",
+    "google-protobuf": "4.0.2",
+    "next": "16.2.10",
+    "pg": "8.22.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
   },
   "devDependencies": {
-    "@babel/core": "^7.6.0",
-    "babel-eslint": "^10.0.1",
-    "dotenv-cli": "^3.1.0",
-    "eslint": "^5.14.1",
-    "eslint-config-airbnb": "^17.1.0",
-    "eslint-config-prettier": "^4.1.0",
-    "eslint-config-wesbos": "0.0.19",
-    "eslint-plugin-html": "^5.0.3",
-    "eslint-plugin-import": "^2.16.0",
-    "eslint-plugin-jsx-a11y": "^6.2.1",
-    "eslint-plugin-prettier": "^3.0.1",
-    "eslint-plugin-react": "^7.12.4",
-    "eslint-plugin-react-hooks": "^1.6.0",
-    "eslint-plugin-testcafe": "^0.2.1",
-    "prettier": "^1.16.4"
+    "@eslint/js": "10.0.1",
+    "eslint": "10.7.0",
+    "globals": "17.7.0",
+    "tsx": "4.23.1"
+  },
+  "overrides": {
+    "postcss": "8.5.10"
   }
 }
